@@ -1,115 +1,447 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_stream/camera.dart';
+import 'package:wakelock/wakelock.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+class CameraExampleHome extends StatefulWidget {
+  const CameraExampleHome({Key? key}) : super(key: key);
 
-class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
-
-  // This widget is the root of your application.
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
+  _CameraExampleHomeState createState() {
+    return _CameraExampleHomeState();
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key? key, required this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+/// Returns a suitable camera icon for [direction].
+IconData getCameraLensIcon(CameraLensDirection direction) {
+  switch (direction) {
+    case CameraLensDirection.back:
+      return Icons.camera_rear;
+    case CameraLensDirection.front:
+      return Icons.camera_front;
+    case CameraLensDirection.external:
+      return Icons.camera;
+  }
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+void logError(String code, String message) =>
+    print('Error: $code\nError Message: $message');
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+class _CameraExampleHomeState extends State<CameraExampleHome>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
+  CameraController? controller =
+      CameraController(cameras[1], ResolutionPreset.high);
+  String? imagePath;
+  String? videoPath;
+  String? url;
+  VideoPlayerController? videoController;
+  late VoidCallback videoPlayerListener;
+  bool enableAudio = true;
+  bool useOpenGL = true;
+  String streamURL = "rtmp://[your rtmp server address]/live";
+  bool streaming = false;
+  String? cameraDirection;
+
+  Timer? _timer;
+
+  @override
+  void initState() {
+    _initialize();
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _initialize() async {
+    streaming = false;
+    cameraDirection = 'front';
+    // controller = CameraController(cameras[1], Resolution.high);
+    await controller!.initialize();
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // App state changed before we got the chance to initialize.
+    if (controller == null || !controller!.value.isInitialized) {
+      return;
+    }
+    if (state == AppLifecycleState.inactive) {
+      controller?.dispose();
+      if (_timer != null) {
+        _timer!.cancel();
+        _timer = null;
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      if (controller != null) {
+        onNewCameraSelected(controller!.description!);
+      }
+    }
+  }
+
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  toggleCameraDirection() async {
+    if (cameraDirection == 'front') {
+      if (controller != null) {
+        await controller?.dispose();
+      }
+      controller = CameraController(
+        cameras[0],
+        ResolutionPreset.high,
+        enableAudio: enableAudio,
+        androidUseOpenGL: useOpenGL,
+      );
+
+      // If the controller is updated then update the UI.
+      controller!.addListener(() {
+        if (mounted) setState(() {});
+        if (controller!.value.hasError) {
+          showInSnackBar('Camera error ${controller!.value.errorDescription}');
+          if (_timer != null) {
+            _timer!.cancel();
+            _timer = null;
+          }
+          Wakelock.disable();
+        }
+      });
+
+      try {
+        await controller!.initialize();
+      } on CameraException catch (e) {
+        _showCameraException(e);
+      }
+
+      if (mounted) {
+        setState(() {});
+      }
+      cameraDirection = 'back';
+    } else {
+      if (controller != null) {
+        await controller!.dispose();
+      }
+      controller = CameraController(
+        cameras[1],
+        ResolutionPreset.high,
+        enableAudio: enableAudio,
+        androidUseOpenGL: useOpenGL,
+      );
+
+      // If the controller is updated then update the UI.
+      controller!.addListener(() {
+        if (mounted) setState(() {});
+        if (controller!.value.hasError) {
+          showInSnackBar('Camera error ${controller!.value.errorDescription}');
+          if (_timer != null) {
+            _timer!.cancel();
+            _timer = null;
+          }
+          Wakelock.disable();
+        }
+      });
+
+      try {
+        await controller!.initialize();
+      } on CameraException catch (e) {
+        _showCameraException(e);
+      }
+
+      if (mounted) {
+        setState(() {});
+      }
+      cameraDirection = 'front';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      extendBodyBehindAppBar: true,
+      resizeToAvoidBottomInset: true,
+      key: _scaffoldKey,
+      body: SingleChildScrollView(
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height,
+          child: Stack(
+            children: <Widget>[
+              Container(
+                color: Colors.black,
+                child: Center(
+                  child: _cameraPreviewWidget(),
+                ),
+              ),
+              Positioned(
+                top: 0.0,
+                left: 0.0,
+                right: 0.0,
+                child: AppBar(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0.0,
+                  title: streaming
+                      ? ElevatedButton(
+                          onPressed: () => onStopButtonPressed(),
+                          style: ButtonStyle(
+                              backgroundColor:
+                                  MaterialStateProperty.all<Color>(Colors.red)),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.videocam_off),
+                              SizedBox(width: 10),
+                              Text(
+                                'End Stream',
+                                style: TextStyle(
+                                  fontSize: 20.0,
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ElevatedButton(
+                          onPressed: () => onVideoStreamingButtonPressed(),
+                          style: ButtonStyle( backgroundColor: MaterialStateProperty.all<Color>(Colors.blue)),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.videocam),
+                              SizedBox(width: 10),
+                              Text(
+                                'Start Stream',
+                                style: TextStyle(
+                                  fontSize: 20.0,
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                  actions: [
+                    Padding(
+                      padding: const EdgeInsets.all(10.0),
+                      child: IconButton(
+                        color: Theme.of(context).primaryColor,
+                        icon: const Icon(Icons.switch_video),
+                        tooltip: 'Switch Camera',
+                        onPressed: () {
+                          toggleCameraDirection();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Display the preview from the camera (or a message if the preview is not available).
+  Widget _cameraPreviewWidget() {
+    if (controller == null || !controller!.value.isInitialized) {
+      return const Text(
+        'Tap a camera',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 24.0,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    } else {
+      return AspectRatio(
+        aspectRatio: controller!.value.aspectRatio,
+        child: CameraPreview(controller!),
+      );
+    }
+  }
+
+  String timestamp() => DateTime.now().millisecondsSinceEpoch.toString();
+
+  void showInSnackBar(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void onNewCameraSelected(CameraDescription? cameraDescription) async {
+    if (controller != null) {
+      await controller!.dispose();
+    }
+    if (cameraDescription == null) {
+      print('cameraDescription is null');
+    }
+    controller = CameraController(
+      cameraDescription,
+      ResolutionPreset.medium,
+      enableAudio: enableAudio,
+      androidUseOpenGL: useOpenGL,
+    );
+
+    // If the controller is updated then update the UI.
+    controller!.addListener(() {
+      if (mounted) setState(() {});
+      if (controller!.value.hasError) {
+        showInSnackBar('Camera error ${controller!.value.errorDescription}');
+        if (_timer != null) {
+          _timer!.cancel();
+          _timer = null;
+        }
+        Wakelock.disable();
+      }
+    });
+
+    try {
+      await controller!.initialize();
+    } on CameraException catch (e) {
+      _showCameraException(e);
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void onVideoStreamingButtonPressed() {
+    startVideoStreaming().then((url) {
+      if (mounted) {
+        setState(() {
+          streaming = true;
+        });
+      }
+      if (url!.isNotEmpty) showInSnackBar('Streaming video to $url');
+      Wakelock.enable();
     });
   }
 
+  void onStopButtonPressed() {
+    stopVideoStreaming().then((_) {
+      if (mounted) {
+        setState(() {
+          streaming = false;
+        });
+      }
+      showInSnackBar('Streaming to: $url');
+    });
+    Wakelock.disable();
+  }
+
+  void onPauseStreamingButtonPressed() {
+    pauseVideoStreaming().then((_) {
+      if (mounted) setState(() {});
+      showInSnackBar('Streaming paused');
+    });
+  }
+
+  void onResumeStreamingButtonPressed() {
+    resumeVideoStreaming().then((_) {
+      if (mounted) setState(() {});
+      showInSnackBar('Streaming resumed');
+    });
+  }
+
+  Future<String?> startVideoStreaming() async {
+    if (!controller!.value.isInitialized) {
+      showInSnackBar('Error: select a camera first.');
+      return null;
+    }
+
+    // Open up a dialog for the url
+    String myUrl = streamURL;
+
+    try {
+      if (_timer != null) {
+        _timer!.cancel();
+        _timer = null;
+      }
+      url = myUrl;
+      await controller!.startVideoStreaming(url!, androidUseOpenGL: false);
+      // _timer = Timer.periodic(Duration(seconds: 1), (timer) async {
+      //   var stats = await controller!.getStreamStatistics();
+      //   print(stats);
+      // });
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      return null;
+    }
+    return url;
+  }
+
+  Future<void> stopVideoStreaming() async {
+    try {
+      await controller!.stopVideoStreaming();
+      if (_timer != null) {
+        _timer!.cancel();
+        _timer = null;
+      }
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      return;
+    }
+  }
+
+  Future<void> pauseVideoStreaming() async {
+    if (!controller!.value.isStreamingVideoRtmp) {
+      return;
+    }
+
+    try {
+      await controller!.pauseVideoStreaming();
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      rethrow;
+    }
+  }
+
+  Future<void> resumeVideoStreaming() async {
+    try {
+      await controller!.resumeVideoStreaming();
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      rethrow;
+    }
+  }
+
+  void _showCameraException(CameraException e) {
+    logError(e.code, e.description);
+    showInSnackBar('Error: ${e.code}\n${e.description}');
+  }
+}
+
+class CameraApp extends StatelessWidget {
+  const CameraApp({Key? key}) : super(key: key);
+
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    return const MaterialApp(
+      home: CameraExampleHome(),
     );
   }
+}
+
+List<CameraDescription> cameras = [];
+
+Future<void> main() async {
+  // Fetch the available cameras before initializing the app.
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    cameras = await availableCameras();
+  } on CameraException catch (e) {
+    logError(e.code, e.description);
+  }
+  runApp(const CameraApp());
 }
